@@ -218,6 +218,43 @@ def describe_work_queue():
         assert grandchild_ran_spy.call_count == 0
         assert child_ran_spy.call_count == 1
 
+    async def skips_failure_events_for_groups_not_promoted_to_root():
+        root = Group(name="root")
+        child = Group(root, name="child")
+        sibling = Group(name="sibling")
+
+        boom = RuntimeError("boom")
+
+        def fail() -> WorkResult:
+            raise boom
+
+        # shared between the never promoted child group and the root sibling
+        failing_shared_task = make_task([child, sibling], fail)
+
+        async def slow_root() -> WorkResult:
+            await sleep(0.01)
+            return WorkResult("root")
+
+        root_task = make_task([root], slow_root)
+
+        initial_groups, initial_streams, events = await collect_work_run(
+            Work(
+                groups=[root, child, sibling],
+                tasks=[root_task, failing_shared_task],
+            )
+        )
+
+        assert initial_groups == [root, sibling]
+        assert initial_streams == []
+        # the child group was never promoted to a root group, so its failure
+        # is not reported; only the announced sibling group is completed
+        assert events == [
+            GroupFailureEvent(sibling, boom),
+            GroupValuesEvent(root, ["root"]),
+            GroupSuccessEvent(root, [], []),
+            WorkQueueTerminationEvent(),
+        ]
+
     async def integrates_work_object_returned_by_task():
         root = Group(name="root")
         child = Group(root, name="child")
@@ -1094,8 +1131,9 @@ def describe_work_queue():
 
         assert initial_groups == [parent]
         assert initial_streams == []
+        # child_a was never promoted to a root group, so its failure is not
+        # reported; only the announced parent group is completed
         assert events == [
-            GroupFailureEvent(child_a, boom),
             GroupFailureEvent(parent, boom),
             WorkQueueTerminationEvent(),
         ]

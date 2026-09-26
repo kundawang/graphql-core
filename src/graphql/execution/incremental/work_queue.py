@@ -577,12 +577,19 @@ class WorkQueue:
         task, error = graph_event
         self._task_nodes.pop(task, None)
         group_failure_events: list[GroupFailureEvent] = []
+        root_groups = self._root_groups
         for group in task.groups:
             group_node = self._group_nodes.get(group)
             if group_node:
-                group_failure_events.append(
-                    self._finish_group_failure(group, group_node, error)
-                )
+                if group in root_groups:
+                    group_failure_events.append(
+                        self._finish_group_failure(group, group_node, error)
+                    )
+                else:
+                    # The group was never promoted for delivery, so no
+                    # failure event is emitted for it; just remove it and
+                    # its subtree from the graph.
+                    self._remove_group(group, group_node)
         return group_failure_events
 
     def _stream_items(

@@ -2146,6 +2146,79 @@ def describe_execute_defer_directive():
             },
         ]
 
+    async def emits_single_completion_for_erroring_shared_grouped_field_set():
+        """Emits a single completion for an erroring shared grouped field set
+
+        When a grouped field set shared by multiple defer usages fails while
+        one of its delivery groups has not been released as pending yet, only
+        the announced delivery group is completed; no completion is emitted
+        for the delivery group the client never heard of.
+        """
+        document = parse(
+            """
+            query {
+              a {
+                ... @defer {
+                  someField
+                  ... @defer {
+                    nonNullErrorField
+                  }
+                }
+              }
+              a {
+                ... @defer {
+                  nonNullErrorField
+                }
+              }
+            }
+            """
+        )
+
+        async def slow(_info):
+            await sleep(0)
+            return "slow"
+
+        result = await complete(
+            document,
+            {"a": {"someField": slow, "nonNullErrorField": None}},
+        )
+        assert result == [
+            {
+                "data": {"a": {}},
+                "pending": [
+                    {"id": "0", "path": ["a"]},
+                    {"id": "1", "path": ["a"]},
+                ],
+                "hasNext": True,
+            },
+            {
+                "completed": [
+                    {
+                        "id": "1",
+                        "errors": [
+                            {
+                                "message": "Cannot return null"
+                                " for non-nullable field a.nonNullErrorField.",
+                                "locations": [
+                                    {"line": 7, "column": 21},
+                                    {"line": 13, "column": 19},
+                                ],
+                                "path": ["a", "nonNullErrorField"],
+                            },
+                        ],
+                    },
+                ],
+                "hasNext": True,
+            },
+            {
+                "incremental": [
+                    {"data": {"someField": "slow"}, "id": "0"},
+                ],
+                "completed": [{"id": "0"}],
+                "hasNext": False,
+            },
+        ]
+
     async def nulls_cross_defer_boundaries_value_first():
         """Nulls cross defer boundaries, value first"""
         document = parse(
